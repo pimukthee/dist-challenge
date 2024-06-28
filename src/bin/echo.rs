@@ -1,7 +1,7 @@
 use anyhow::Context;
 use dist_challenge::*;
 use serde::{Deserialize, Serialize};
-use std::io::BufRead;
+use std::io::{BufRead, Write};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -11,36 +11,30 @@ enum EchoBody {
     EchoOk { echo: String },
 }
 
-impl IntoResponse for EchoBody {
-    fn into_response(self) -> EchoBody {
-        match self {
-            EchoBody::Echo { echo } => EchoBody::EchoOk { echo },
-            _ => unimplemented!(),
-        }
+struct EchoNode {
+    id: String,
+}
+
+impl Node<EchoBody> for EchoNode {
+    fn new(id: String) -> Self {
+        Self { id }
+    }
+
+    fn handle(&self, message: Message<EchoBody>, output: &mut impl Write) -> anyhow::Result<()> {
+        let mut response = message.into_response();
+        match response.body.kind {
+            EchoBody::Echo { echo } => response.body.kind = EchoBody::EchoOk { echo },
+            EchoBody::EchoOk { .. } => {}
+        };
+
+        serde_json::to_writer(&mut *output, &response).context("failed to serialize echo")?;
+        output.write_all(b"\n")?;
+
+        Ok(())
     }
 }
 
 fn main() -> anyhow::Result<()> {
-    let mut stdin = std::io::stdin().lock().lines();
-    let mut stdout = std::io::stdout().lock();
-
-    let init_message = serde_json::from_str::<Message<InitBody>>(
-        &stdin.next().expect("no init message received")?,
-    )?;
-
-    init_message
-        .into_response(&mut stdout)
-        .context("response")?;
-
-    for line in stdin {
-        let message = serde_json::from_str::<Message<EchoBody>>(
-            &line.context("Maelstrom input could not be read")?,
-        )
-        .context("maelstrom input could not be deserialize")?;
-
-        message.into_response(&mut stdout).context("response")?;
-    }
-
+    start_node::<EchoNode, EchoBody>()?;
     Ok(())
 }
-

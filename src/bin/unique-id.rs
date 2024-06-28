@@ -1,9 +1,7 @@
-use dist_challenge::*;
-use std::io::BufRead;
-use ulid::Ulid;
-
 use anyhow::Context;
+use dist_challenge::*;
 use serde::{Deserialize, Serialize};
+use ulid::Ulid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -13,37 +11,38 @@ enum UniqueIdBody {
     GenerateOk { id: String },
 }
 
-impl IntoResponse for UniqueIdBody {
-    fn into_response(self) -> Self {
-        UniqueIdBody::GenerateOk {
-            id: Ulid::new().to_string(),
-        }
+struct UniqueIdNode {
+    id: String,
+}
+
+impl Node<UniqueIdBody> for UniqueIdNode {
+    fn new(id: String) -> Self {
+        Self { id }
+    }
+
+    fn handle(
+        &self,
+        message: Message<UniqueIdBody>,
+        output: &mut impl std::io::Write,
+    ) -> anyhow::Result<()> {
+        let mut response = message.into_response();
+        match response.body.kind {
+            UniqueIdBody::Generate => {
+                response.body.kind = UniqueIdBody::GenerateOk {
+                    id: Ulid::new().to_string(),
+                }
+            }
+            UniqueIdBody::GenerateOk { .. } => {}
+        };
+
+        serde_json::to_writer(&mut *output, &response).context("failed to serialize echo")?;
+        output.write_all(b"\n")?;
+
+        Ok(())
     }
 }
 
 fn main() -> anyhow::Result<()> {
-    let mut lines = std::io::stdin().lock().lines();
-    let mut stdout = std::io::stdout().lock();
-
-    let init_message = serde_json::from_str::<Message<InitBody>>(
-        &lines
-            .next()
-            .expect("not received init message")
-            .context("failed to retrieved init message from stdin")?,
-    )
-    .context("failed to deserialize init message")?;
-    init_message
-        .into_response(&mut stdout)
-        .context("response")?;
-
-    for line in lines {
-        let message = serde_json::from_str::<Message<UniqueIdBody>>(
-            &line.context("Maelstrom input could not be read")?,
-        )
-        .context("maelstrom input could not be deserialize")?;
-
-        message.into_response(&mut stdout).context("response")?;
-    }
-
+    start_node::<UniqueIdNode, UniqueIdBody>()?;
     Ok(())
 }

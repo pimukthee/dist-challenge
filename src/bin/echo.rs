@@ -20,7 +20,11 @@ impl Node<EchoBody> for EchoNode {
         Self { id }
     }
 
-    fn handle(&self, message: Message<EchoBody>, output: &mut impl Write) -> anyhow::Result<()> {
+    fn handle(
+        &mut self,
+        message: Message<EchoBody>,
+        output: &mut impl Write,
+    ) -> anyhow::Result<()> {
         let mut response = message.into_response();
         match response.body.kind {
             EchoBody::Echo { echo } => response.body.kind = EchoBody::EchoOk { echo },

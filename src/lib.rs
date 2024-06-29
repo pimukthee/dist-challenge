@@ -46,7 +46,11 @@ impl<BodyKind> Message<BodyKind> {
 
 pub trait Node<NodeMessage> {
     fn new(id: String) -> Self;
-    fn handle(&self, message: Message<NodeMessage>, output: &mut impl Write) -> anyhow::Result<()>;
+    fn handle(
+        &mut self,
+        message: Message<NodeMessage>,
+        output: &mut impl Write,
+    ) -> anyhow::Result<()>;
 }
 
 pub fn start_node<N: Node<NodeMessage>, NodeMessage: DeserializeOwned>() -> anyhow::Result<()> {
@@ -56,11 +60,11 @@ pub fn start_node<N: Node<NodeMessage>, NodeMessage: DeserializeOwned>() -> anyh
     let init_message = serde_json::from_str::<Message<InitBody>>(
         &lines.next().expect("no init message received")?,
     )?;
-    let InitBody::Init { node_id, node_ids } = init_message.body.kind else {
+    let InitBody::Init { node_id, .. } = init_message.body.kind else {
         panic!("first message is not init");
     };
 
-    let node: N = Node::new(node_id);
+    let mut node: N = Node::new(node_id);
 
     let response = Message {
         src: init_message.dst,

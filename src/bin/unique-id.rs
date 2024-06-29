@@ -21,7 +21,7 @@ impl Node<UniqueIdBody> for UniqueIdNode {
     }
 
     fn handle(
-        &self,
+        &mut self,
         message: Message<UniqueIdBody>,
         output: &mut impl std::io::Write,
     ) -> anyhow::Result<()> {

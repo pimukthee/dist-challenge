@@ -1,13 +1,14 @@
 use std::io::{BufRead, Write};
+use std::time::Duration;
 
 use anyhow::Context;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message<BodyKind> {
-    src: String,
+    pub src: String,
     #[serde(rename = "dest")]
-    dst: String,
+    pub dst: String,
     pub body: Body<BodyKind>,
 }
 
@@ -15,8 +16,8 @@ pub struct Message<BodyKind> {
 pub struct Body<Kind> {
     #[serde(flatten)]
     pub kind: Kind,
-    msg_id: Option<usize>,
-    in_reply_to: Option<usize>,
+    pub msg_id: Option<usize>,
+    pub in_reply_to: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,26 +46,36 @@ impl<BodyKind> Message<BodyKind> {
 }
 
 pub trait Node<NodeMessage> {
-    fn new(id: String) -> Self;
+    fn new(id: String, node_ids: Vec<String>) -> Self;
     fn handle(
         &mut self,
         message: Message<NodeMessage>,
         output: &mut impl Write,
     ) -> anyhow::Result<()>;
+    fn gossip(&mut self, output: &mut impl Write) -> anyhow::Result<()>;
 }
 
-pub fn start_node<N: Node<NodeMessage>, NodeMessage: DeserializeOwned>() -> anyhow::Result<()> {
+enum Event<BodyKind> {
+    NewMessage(Message<BodyKind>),
+    Gossip,
+}
+
+pub fn start_node<N, NodeMessage>() -> anyhow::Result<()>
+where
+    N: Node<NodeMessage> + Send,
+    NodeMessage: DeserializeOwned + Send + 'static + std::fmt::Debug,
+{
     let mut lines = std::io::stdin().lock().lines();
     let mut stdout = std::io::stdout().lock();
 
     let init_message = serde_json::from_str::<Message<InitBody>>(
         &lines.next().expect("no init message received")?,
     )?;
-    let InitBody::Init { node_id, .. } = init_message.body.kind else {
+    let InitBody::Init { node_id, node_ids } = init_message.body.kind else {
         panic!("first message is not init");
     };
 
-    let mut node: N = Node::new(node_id);
+    let mut node: N = Node::new(node_id, node_ids);
 
     let response = Message {
         src: init_message.dst,
@@ -78,14 +89,49 @@ pub fn start_node<N: Node<NodeMessage>, NodeMessage: DeserializeOwned>() -> anyh
     serde_json::to_writer(&mut stdout, &response).context("failed to parse init ok")?;
     stdout.write_all(b"\n")?;
 
-    for line in lines {
-        let message = serde_json::from_str::<Message<NodeMessage>>(
-            &line.context("could not read from STDIN")?,
-        )
-        .context("could not deserialize from STDIN")?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    let message_tx = tx.clone();
+    let gossip_tx = tx.clone();
 
-        node.handle(message, &mut stdout)?;
+    drop(lines);
+    let jh = std::thread::spawn(move || {
+        let lines = std::io::stdin().lock().lines();
+        for line in lines {
+            let message = serde_json::from_str::<Message<NodeMessage>>(
+                &line.context("could not read from STDIN")?,
+            )
+            .context("could not deserialize from STDIN")?;
+            if let Err(_) = message_tx.send(Event::NewMessage(message)) {
+                return Ok::<_, anyhow::Error>(());
+            }
+        }
+
+        Ok(())
+    });
+
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(Duration::from_millis(500));
+            if let Err(_) = gossip_tx.send(Event::Gossip) {
+                break;
+            }
+        }
+
+        anyhow::Ok(())
+    });
+
+    for event in rx {
+        match event {
+            Event::NewMessage(message) => {
+                node.handle(message, &mut stdout)?;
+            }
+            Event::Gossip => {
+                node.gossip(&mut stdout)?;
+            }
+        }
     }
-
+    jh.join()
+        .expect("message thread panic")
+        .context("message thread error")?;
     Ok(())
 }

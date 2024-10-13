@@ -16,7 +16,7 @@ struct UniqueIdNode {
 }
 
 impl Node<UniqueIdBody> for UniqueIdNode {
-    fn new(id: String) -> Self {
+    fn new(id: String, _: Vec<String>) -> Self {
         Self { id }
     }
 
@@ -38,6 +38,10 @@ impl Node<UniqueIdBody> for UniqueIdNode {
         serde_json::to_writer(&mut *output, &response).context("failed to serialize echo")?;
         output.write_all(b"\n")?;
 
+        Ok(())
+    }
+
+    fn gossip(&mut self, _output: &mut impl std::io::Write) -> anyhow::Result<()> {
         Ok(())
     }
 }

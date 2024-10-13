@@ -1,7 +1,8 @@
 use anyhow::Context;
 use dist_challenge::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::io::Write;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type")]
@@ -19,20 +20,28 @@ enum BroadcastBody {
         topology: HashMap<String, Vec<String>>,
     },
     TopologyOk,
+    Gossip {
+        messages: Vec<usize>,
+    },
 }
 
 struct BroadcastNode {
     id: String,
     neighbors: Vec<String>,
     messages: Vec<usize>,
+    seen: HashMap<String, HashSet<usize>>,
 }
 
 impl Node<BroadcastBody> for BroadcastNode {
-    fn new(id: String) -> Self {
+    fn new(id: String, node_ids: Vec<String>) -> Self {
         Self {
             id,
             neighbors: vec![],
             messages: vec![],
+            seen: node_ids
+                .into_iter()
+                .map(|id| (id, HashSet::new()))
+                .collect(),
         }
     }
 
@@ -56,6 +65,14 @@ impl Node<BroadcastBody> for BroadcastNode {
                 response.body.kind = BroadcastBody::TopologyOk;
                 self.neighbors = topology.remove(&self.id).unwrap_or(vec![]);
             }
+            BroadcastBody::Gossip { messages } => {
+                self.seen
+                    .get_mut(&response.dst)
+                    .unwrap()
+                    .extend(messages.iter().copied());
+                self.messages.extend(messages);
+                return Ok(());
+            }
 
             BroadcastBody::TopologyOk
             | BroadcastBody::ReadOk { .. }
@@ -65,6 +82,29 @@ impl Node<BroadcastBody> for BroadcastNode {
         serde_json::to_writer(&mut *output, &response).context("cannot serialize message")?;
         output.write(b"\n")?;
 
+        Ok(())
+    }
+
+    fn gossip(&mut self, output: &mut impl Write) -> anyhow::Result<()> {
+        for n in &self.neighbors {
+            let messages = self
+                .messages
+                .iter()
+                .copied()
+                .filter(|&message| !self.seen.get(n).unwrap().contains(&message))
+                .collect();
+            let message = Message {
+                src: self.id.clone(),
+                dst: n.to_string(),
+                body: Body {
+                    msg_id: None,
+                    in_reply_to: None,
+                    kind: BroadcastBody::Gossip { messages },
+                },
+            };
+            serde_json::to_writer(&mut *output, &message).context("cannot serialize message")?;
+            output.write(b"\n")?;
+        }
         Ok(())
     }
 }

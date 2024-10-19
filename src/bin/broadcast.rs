@@ -23,6 +23,9 @@ enum BroadcastBody {
     Gossip {
         messages: Vec<usize>,
     },
+    GossipOk {
+        messages: Vec<usize>,
+    },
 }
 
 struct BroadcastNode {
@@ -70,7 +73,14 @@ impl Node<BroadcastBody> for BroadcastNode {
                     .get_mut(&response.dst)
                     .unwrap()
                     .extend(messages.iter().copied());
-                self.messages.extend(messages);
+                self.messages.extend(messages.iter());
+                response.body.kind = BroadcastBody::GossipOk { messages };
+            }
+            BroadcastBody::GossipOk { messages } => {
+                self.seen
+                    .get_mut(&response.dst)
+                    .unwrap()
+                    .extend(messages.iter().copied());
                 return Ok(());
             }
 
@@ -92,7 +102,12 @@ impl Node<BroadcastBody> for BroadcastNode {
                 .iter()
                 .copied()
                 .filter(|&message| !self.seen.get(n).unwrap().contains(&message))
-                .collect();
+                .collect::<Vec<_>>();
+
+            if messages.is_empty() {
+                continue;
+            }
+
             let message = Message {
                 src: self.id.clone(),
                 dst: n.to_string(),
